@@ -28,6 +28,7 @@ pub const SOCKET_TYPE_MASK: usize = 0xFF;
 pub enum Domain {
     AF_UNIX = 1,
     AF_INET = 2,
+    AF_NETLINK = 16,
 }
 
 #[derive(TryFromPrimitive, PartialEq, Eq, Clone, Debug)]
@@ -442,7 +443,7 @@ impl Socket {
             SocketType::SOCK_STREAM | SocketType::SOCK_SEQPACKET => {
                 SocketInner::Tcp(TcpSocket::new())
             }
-            SocketType::SOCK_DGRAM => SocketInner::Udp(UdpSocket::new()),
+            SocketType::SOCK_RAW | SocketType::SOCK_DGRAM => SocketInner::Udp(UdpSocket::new()),
             _ => unimplemented!(),
         };
         Self {
@@ -728,7 +729,7 @@ pub unsafe fn socket_address_from(addr: *const u8) -> SocketAddr {
     let domain = Domain::try_from(*addr as usize).expect("Unsupported Domain (Address Family)");
     match domain {
         Domain::AF_UNIX => unimplemented!(),
-        Domain::AF_INET => {
+        Domain::AF_NETLINK | Domain::AF_INET => {
             let port = u16::from_be(*addr.add(1));
             let a = (*(addr.add(2) as *const u32)).to_le_bytes();
 

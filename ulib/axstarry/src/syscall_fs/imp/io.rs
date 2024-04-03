@@ -407,6 +407,11 @@ pub fn syscall_open(args: [usize; 6]) -> SyscallResult {
     syscall_openat(temp_args)
 }
 
+pub fn syscall_eventfd2(args: [usize; 6]) -> SyscallResult {
+    let temp_args = [AT_FDCWD, args[0], args[1], 0, 0, 0];
+    syscall_openat(temp_args)
+}
+
 /// 功能:关闭一个文件描述符；
 /// # Arguments
 /// * `fd`: usize, 要关闭的文件描述符。
