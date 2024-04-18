@@ -5,6 +5,8 @@ mod listen_table;
 
 mod tcp;
 mod udp;
+mod netlink;
+
 use alloc::vec;
 use core::cell::RefCell;
 use core::ops::DerefMut;
@@ -18,13 +20,15 @@ use smoltcp::iface::{Config, Interface, SocketHandle, SocketSet};
 use smoltcp::phy::{Device, DeviceCapabilities, Medium, RxToken, TxToken};
 use smoltcp::socket::{self, AnySocket};
 use smoltcp::time::Instant;
-use smoltcp::wire::{EthernetAddress, HardwareAddress, IpAddress, IpCidr};
+use smoltcp::wire::{self, EthernetAddress, HardwareAddress, IpAddress, IpCidr};
 
 use self::listen_table::ListenTable;
 
 pub use self::dns::dns_query;
 pub use self::tcp::TcpSocket;
 pub use self::udp::UdpSocket;
+pub use self::netlink::NetlinkSocket;
+
 pub use addr::{from_core_sockaddr, into_core_sockaddr};
 #[allow(unused)]
 macro_rules! env_or_default {
@@ -44,6 +48,8 @@ const TCP_RX_BUF_LEN: usize = 64 * 1024;
 const TCP_TX_BUF_LEN: usize = 64 * 1024;
 const UDP_RX_BUF_LEN: usize = 64 * 1024;
 const UDP_TX_BUF_LEN: usize = 64 * 1024;
+const RAW_RX_BUF_LEN: usize = 64 * 1024;
+const RAW_TX_BUF_LEN: usize = 64 * 1024;
 const LISTEN_QUEUE_SIZE: usize = 512;
 
 static LISTEN_TABLE: LazyInit<ListenTable> = LazyInit::new();
@@ -104,6 +110,13 @@ impl<'a> SocketSetWrapper<'a> {
     pub fn new_dns_socket() -> socket::dns::Socket<'a> {
         let server_addr = DNS_SEVER.parse().expect("invalid DNS server address");
         socket::dns::Socket::new(&[server_addr], vec![])
+    }
+
+    pub fn new_raw_socket() -> socket::raw::Socket<'a> {
+        let raw_rx_buffer = socket::raw::PacketBuffer::new(vec![socket::raw::PacketMetadata::EMPTY; 8], vec![0; RAW_RX_BUF_LEN]);
+        let raw_tx_buffer = socket::raw::PacketBuffer::new(vec![socket::raw::PacketMetadata::EMPTY; 8], vec![0; RAW_TX_BUF_LEN]);
+
+        socket::raw::Socket::new(wire::IpVersion::Ipv4, wire::IpProtocol::Igmp, raw_rx_buffer, raw_tx_buffer)
     }
 
     pub fn add<T: AnySocket<'a>>(&self, socket: T) -> SocketHandle {

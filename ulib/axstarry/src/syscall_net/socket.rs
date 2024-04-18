@@ -10,10 +10,10 @@ use alloc::string::String;
 use axerrno::{AxError, AxResult};
 use axfs::api::{FileIO, FileIOType, OpenFlags, Read, Write};
 
-use axlog::warn;
+use axlog::{warn, error};
 use axnet::{
     from_core_sockaddr, into_core_sockaddr, poll_interfaces, IpAddr, SocketAddr, TcpSocket,
-    UdpSocket,
+    UdpSocket, NetlinkSocket
 };
 use axsync::Mutex;
 use num_enum::TryFromPrimitive;
@@ -150,7 +150,7 @@ impl SocketOption {
                 let mut inner = socket.inner.lock();
 
                 match &mut (*inner) {
-                    SocketInner::Udp(_) => {
+                    SocketInner::Udp(_) | SocketInner::NetLink(_) => {
                         warn!("[setsockopt()] set SO_KEEPALIVE on udp socket, ignored")
                     }
                     SocketInner::Tcp(s) => s.with_socket_mut(|s| match s {
@@ -241,7 +241,7 @@ impl SocketOption {
 
                 let mut inner = socket.inner.lock();
                 let keep_alive: i32 = match &mut *inner {
-                    SocketInner::Udp(_) => {
+                    SocketInner::Udp(_) | SocketInner::NetLink(_) => {
                         warn!("[getsockopt()] get SO_KEEPALIVE on udp socket, returning false");
                         0
                     }
@@ -390,10 +390,13 @@ pub enum SocketInner {
     Tcp(TcpSocket),
     /// UDP socket
     Udp(UdpSocket),
+    // // NetLinkSocket
+    NetLink(NetlinkSocket),
 }
 
 impl Socket {
     fn get_recv_timeout(&self) -> Option<TimeVal> {
+        error!("----get_recv_timeout 001 ===============");
         *self.recv_timeout.lock()
     }
     fn get_reuse_addr(&self) -> bool {
@@ -443,7 +446,8 @@ impl Socket {
             SocketType::SOCK_STREAM | SocketType::SOCK_SEQPACKET => {
                 SocketInner::Tcp(TcpSocket::new())
             }
-            SocketType::SOCK_RAW | SocketType::SOCK_DGRAM => SocketInner::Udp(UdpSocket::new()),
+            SocketType::SOCK_DGRAM => SocketInner::Udp(UdpSocket::new()),
+            SocketType::SOCK_RAW  => SocketInner::NetLink(NetlinkSocket::new(0, 0)),
             _ => unimplemented!(),
         };
         Self {
@@ -467,6 +471,7 @@ impl Socket {
         match &*inner {
             SocketInner::Tcp(s) => s.set_nonblocking(nonblocking),
             SocketInner::Udp(s) => s.set_nonblocking(nonblocking),
+            SocketInner::NetLink(s) => s.set_nonblocking(nonblocking),
         }
     }
 
@@ -476,6 +481,7 @@ impl Socket {
         match &*inner {
             SocketInner::Tcp(s) => s.is_nonblocking(),
             SocketInner::Udp(s) => s.is_nonblocking(),
+            SocketInner::NetLink(s) => s.is_nonblocking(),
         }
     }
 
@@ -485,6 +491,7 @@ impl Socket {
         match &*inner {
             SocketInner::Tcp(s) => s.is_connected(),
             SocketInner::Udp(s) => s.with_socket(|s| s.is_open()),
+            SocketInner::NetLink(s) => true,
         }
     }
 
@@ -494,6 +501,7 @@ impl Socket {
         match &*inner {
             SocketInner::Tcp(s) => s.local_addr(),
             SocketInner::Udp(s) => s.local_addr(),
+            SocketInner::NetLink(s) => Err(AxError::NotConnected)
         }
         .map(from_core_sockaddr)
     }
@@ -504,6 +512,7 @@ impl Socket {
         match &*inner {
             SocketInner::Tcp(s) => s.peer_addr(),
             SocketInner::Udp(s) => s.peer_addr(),
+            SocketInner::NetLink(s) => Err(AxError::NotConnected)
         }
         .map(from_core_sockaddr)
     }
@@ -514,6 +523,7 @@ impl Socket {
         match &*inner {
             SocketInner::Tcp(s) => s.bind(into_core_sockaddr(addr)),
             SocketInner::Udp(s) => s.bind(into_core_sockaddr(addr)),
+            SocketInner::NetLink(s) => s.bind(),
         }
     }
 
@@ -532,6 +542,7 @@ impl Socket {
         match &*inner {
             SocketInner::Tcp(s) => s.listen(),
             SocketInner::Udp(_) => Err(AxError::Unsupported),
+            SocketInner::NetLink(_) => Err(AxError::Unsupported),
         }
     }
 
@@ -546,6 +557,7 @@ impl Socket {
         let new_socket = match &*inner {
             SocketInner::Tcp(s) => s.accept()?,
             SocketInner::Udp(_) => Err(AxError::Unsupported)?,
+            SocketInner::NetLink(_) => Err(AxError::Unsupported)?,
         };
         let addr = new_socket.peer_addr()?;
 
@@ -572,6 +584,7 @@ impl Socket {
         match &*inner {
             SocketInner::Tcp(s) => s.connect(into_core_sockaddr(addr)),
             SocketInner::Udp(s) => s.connect(into_core_sockaddr(addr)),
+            SocketInner::NetLink(s) => Ok(()),
         }
     }
 
@@ -582,6 +595,7 @@ impl Socket {
         match &*inner {
             SocketInner::Tcp(s) => s.local_addr().is_ok(),
             SocketInner::Udp(s) => s.local_addr().is_ok(),
+            SocketInner::NetLink(_) => true,
         }
     }
     #[allow(unused)]
@@ -591,12 +605,15 @@ impl Socket {
         match &*inner {
             SocketInner::Tcp(s) => s.send(buf),
             SocketInner::Udp(s) => s.send_to(buf, into_core_sockaddr(addr)),
+            SocketInner::NetLink(s) => s.send_to(buf),
         }
     }
 
     /// let the socket receive data and write it to the given buffer
     pub fn recv_from(&self, buf: &mut [u8]) -> AxResult<(usize, SocketAddr)> {
+        error!("----recv_from 001 ===============");
         let inner = self.inner.lock();
+        error!("----recv_from 002 ===============");
         match &*inner {
             SocketInner::Tcp(s) => {
                 let addr = s.peer_addr()?;
@@ -615,6 +632,17 @@ impl Socket {
                     .recv_from(buf)
                     .map(|(val, addr)| (val, from_core_sockaddr(addr))),
             },
+            SocketInner::NetLink(s) => s
+                .recv_from(buf)
+                .map(|(val, addr)| (val, from_core_sockaddr(addr)))
+            // SocketInner::NetLink(s) => match self.get_recv_timeout() {
+            //     Some(time) => s
+            //         .recv_from_timeout(buf, time.turn_to_ticks())
+            //         .map(|(val, addr)| (val, from_core_sockaddr(addr))),
+            //     None => s
+            //         .recv_from(buf)
+            //         .map(|(val, addr)| (val, from_core_sockaddr(addr))),
+            // },
         }
     }
 
@@ -626,6 +654,7 @@ impl Socket {
                 s.shutdown();
             }
             SocketInner::Tcp(s) => s.close(),
+            SocketInner::NetLink(_) => todo!(),
         };
     }
 
@@ -641,6 +670,7 @@ impl Socket {
                     s.abort();
                 }
             }),
+            SocketInner::NetLink(_) => todo!(),
         }
     }
 }
@@ -651,6 +681,7 @@ impl FileIO for Socket {
         match &mut *inner {
             SocketInner::Tcp(s) => s.read(buf),
             SocketInner::Udp(s) => s.read(buf),
+            SocketInner::NetLink(_) => Ok(0),
         }
     }
 
@@ -659,6 +690,7 @@ impl FileIO for Socket {
         match &mut *inner {
             SocketInner::Tcp(s) => s.write(buf),
             SocketInner::Udp(s) => s.write(buf),
+            SocketInner::NetLink(_) => Ok(0),
         }
     }
 
@@ -672,6 +704,7 @@ impl FileIO for Socket {
         match &*inner {
             SocketInner::Tcp(s) => s.poll().map_or(false, |p| p.readable),
             SocketInner::Udp(s) => s.poll().map_or(false, |p| p.readable),
+            SocketInner::NetLink(_) => true,
         }
     }
 
@@ -681,6 +714,7 @@ impl FileIO for Socket {
         match &*inner {
             SocketInner::Tcp(s) => s.poll().map_or(false, |p| p.writable),
             SocketInner::Udp(s) => s.poll().map_or(false, |p| p.writable),
+            SocketInner::NetLink(_) => true,
         }
     }
 

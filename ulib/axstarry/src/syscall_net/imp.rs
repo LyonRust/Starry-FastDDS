@@ -19,6 +19,7 @@ pub const SOCKET_TYPE_MASK: usize = 0xFF;
 /// * `s_type` - usize
 /// * `protocol` - usize
 pub fn syscall_socket(args: [usize; 6]) -> SyscallResult {
+    error!("==== socket args {:?}", args);
     let domain = args[0];
     let s_type = args[1];
     let _protocol = args[2];
@@ -27,6 +28,7 @@ pub fn syscall_socket(args: [usize; 6]) -> SyscallResult {
         // return ErrorNo::EAFNOSUPPORT as isize;
         return Err(SyscallError::EAFNOSUPPORT);
     };
+    error!("==== s_type & SOCKET_TYPE_MASK {}", s_type & SOCKET_TYPE_MASK);
     let Ok(socket_type) = SocketType::try_from(s_type & SOCKET_TYPE_MASK) else {
         // return ErrorNo::EINVAL as isize;
         return Err(SyscallError::EINVAL);
@@ -46,7 +48,7 @@ pub fn syscall_socket(args: [usize; 6]) -> SyscallResult {
 
     fd_table[fd] = Some(Arc::new(socket));
 
-    debug!("[socket()] create socket {fd}");
+    error!("[socket()] create socket {fd}");
 
     Ok(fd as isize)
 }
@@ -157,6 +159,7 @@ pub fn syscall_accept4(args: [usize; 6]) -> SyscallResult {
 /// * `addr_buf` - *const u8
 /// * `addr_len` - usize
 pub fn syscall_connect(args: [usize; 6]) -> SyscallResult {
+    error!("==== socket syscall_connect {:?}", args);
     let fd = args[0];
     let addr_buf = args[1] as *const u8;
     let _addr_len = args[2];
@@ -271,6 +274,7 @@ pub fn syscall_getpeername(args: [usize; 6]) -> SyscallResult {
 /// * `addr` - *const u8
 /// * `addr_len` - usize
 pub fn syscall_sendto(args: [usize; 6]) -> SyscallResult {
+    error!("syscall_sendto {:?}", args);
     let fd = args[0];
     let buf = args[1] as *const u8;
     let len = args[2];
@@ -349,6 +353,7 @@ pub fn syscall_sendto(args: [usize; 6]) -> SyscallResult {
 
             s.send(buf)
         }
+        SocketInner::NetLink(s) => s.send_to(buf)
     };
 
     match send_result {
@@ -369,6 +374,7 @@ pub fn syscall_sendto(args: [usize; 6]) -> SyscallResult {
 /// * `addr_buf` - *mut u8
 /// * `addr_len` - *mut u32
 pub fn syscall_recvfrom(args: [usize; 6]) -> SyscallResult {
+    error!("syscall_recvfrom {:?}", args);
     let fd = args[0];
     let buf = args[1] as *mut u8;
     let len = args[2];
@@ -376,15 +382,16 @@ pub fn syscall_recvfrom(args: [usize; 6]) -> SyscallResult {
     let addr_buf = args[4] as *mut u8;
     let addr_len = args[5] as *mut u32;
     let curr = current_process();
-
+    error!("syscall_recvfrom 001 ===============");
     let file = match curr.fd_manager.fd_table.lock().get(fd) {
         Some(Some(file)) => file.clone(),
         _ => return Err(SyscallError::EBADF),
     };
+    error!("syscall_recvfrom 002 ===============");
     let Some(socket) = file.as_any().downcast_ref::<Socket>() else {
         return Err(SyscallError::ENOTSOCK);
     };
-
+    error!("syscall_recvfrom 003 ===============");
     if !addr_len.is_null()
         && curr
             .manual_alloc_for_lazy((addr_len as usize).into())
@@ -393,6 +400,7 @@ pub fn syscall_recvfrom(args: [usize; 6]) -> SyscallResult {
         error!("[recvfrom()] addr_len address {addr_len:?} invalid");
         return Err(SyscallError::EFAULT);
     }
+    error!("syscall_recvfrom 004 ===============");
     if !addr_buf.is_null()
         && !addr_len.is_null()
         && curr
@@ -408,22 +416,32 @@ pub fn syscall_recvfrom(args: [usize; 6]) -> SyscallResult {
         );
         return Err(SyscallError::EFAULT);
     }
+    error!("syscall_recvfrom 005 ===============");
     let buf = unsafe { from_raw_parts_mut(buf, len) };
+    error!("syscall_recvfrom 006 ===============");
     info!("recv addr: {:?}", socket.name().unwrap());
+    error!("syscall_recvfrom 007 ===============");
     match socket.recv_from(buf) {
         Ok((len, addr)) => {
+            error!("syscall_recvfrom 008 ===============");
             info!("socket {fd} recv {len} bytes from {addr:?}");
+            error!("socket {fd} recv {len} bytes from {addr:?}");
             if !addr_buf.is_null() && !addr_len.is_null() {
+                error!("syscall_recvfrom 009 ===============");
                 Ok(unsafe { socket_address_to(addr, addr_buf, addr_len) }
                     .map_or(-1, |_| len as isize))
             } else {
+                error!("syscall_recvfrom 010 ===============");
                 Ok(len as isize)
             }
         }
         Err(AxError::ConnectionRefused) => Ok(0),
         Err(AxError::Interrupted) => Err(SyscallError::EINTR),
         Err(AxError::Timeout) | Err(AxError::WouldBlock) => Err(SyscallError::EAGAIN),
-        Err(_) => Err(SyscallError::EPERM),
+        Err(err) => {
+            error!("socket.recv_from error: {}", err);
+            Err(SyscallError::EPERM)
+        },
     }
 }
 
@@ -488,6 +506,7 @@ pub fn syscall_set_sock_opt(args: [usize; 6]) -> SyscallResult {
 /// * `opt_value` - *mut u8
 /// * `opt_len` - *mut u32
 pub fn syscall_get_sock_opt(args: [usize; 6]) -> SyscallResult {
+    error!("syscall_get_sock_opt {:?}", args);
     let fd = args[0];
     let level = args[1];
     let opt_name = args[2];

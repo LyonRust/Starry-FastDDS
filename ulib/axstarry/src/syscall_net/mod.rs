@@ -12,6 +12,7 @@ pub use net_syscall_id::NetSyscallId::{self, *};
 
 /// 进行 syscall 的分发
 pub fn net_syscall(syscall_id: net_syscall_id::NetSyscallId, args: [usize; 6]) -> SyscallResult {
+    axlog::error!("syscall_id {:?}", syscall_id);
     match syscall_id {
         SOCKET => syscall_socket(args),
         BIND => syscall_bind(args),
